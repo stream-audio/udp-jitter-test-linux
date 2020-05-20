@@ -1,3 +1,4 @@
+use crate::merge_future::WrongLayoutError;
 use rand;
 use std::borrow::Cow;
 use std::fmt;
@@ -25,6 +26,7 @@ pub enum ErrorRepr {
     AddrParse(net::AddrParseError),
     SystemTime(SystemTimeError),
     Rand(rand::Error),
+    WrongLayoutError(WrongLayoutError),
 }
 
 impl std::error::Error for Error {}
@@ -36,6 +38,7 @@ impl fmt::Display for Error {
             ErrorRepr::AddrParse(e) => fmt::Display::fmt(e, f),
             ErrorRepr::SystemTime(e) => fmt::Display::fmt(e, f),
             ErrorRepr::Rand(e) => fmt::Display::fmt(e, f),
+            ErrorRepr::WrongLayoutError(e) => fmt::Display::fmt(e, f),
         }
     }
 }
@@ -65,6 +68,13 @@ impl From<rand::Error> for Error {
     fn from(e: rand::Error) -> Self {
         Self {
             repr: Box::new(ErrorRepr::Rand(e)),
+        }
+    }
+}
+impl From<WrongLayoutError> for Error {
+    fn from(e: WrongLayoutError) -> Self {
+        Self {
+            repr: Box::new(ErrorRepr::WrongLayoutError(e)),
         }
     }
 }

@@ -3,6 +3,7 @@
 #[macro_use]
 mod macros;
 mod error;
+mod merge_future;
 mod statistic;
 
 use async_std::{
@@ -13,6 +14,7 @@ use error::Error;
 use futures::try_join;
 use libc;
 use log::{error, info, warn};
+use merge_future::FuturesMergerMemoryOwner;
 use rand::{self, rngs::SmallRng, RngCore, SeedableRng};
 use simple_logger;
 use std::cell::RefCell;
@@ -63,9 +65,15 @@ struct ServerRecv<'a> {
 
 struct ServerSend<'a> {
     socket: &'a UdpSocket,
-    pkt_cnt: u32,
     clients: &'a Clients,
+    send_futures: FuturesMergerMemoryOwner,
+    pkt: PktToSend<'a>,
+}
+
+struct PktToSend<'a> {
+    pkt_cnt: u32,
     start: &'a Instant,
+    buf: Vec<u8>,
     random_data: &'a [u8],
     random_data_idx: usize,
 }
@@ -103,11 +111,15 @@ impl Server {
             },
             ServerSend {
                 socket: &self.socket,
-                pkt_cnt: 0,
                 clients: &self.clients,
-                start: &self.start,
-                random_data: &self.random_data,
-                random_data_idx: 0,
+                send_futures: Default::default(),
+                pkt: PktToSend {
+                    pkt_cnt: 0,
+                    start: &self.start,
+                    buf: Vec::new(),
+                    random_data: &self.random_data,
+                    random_data_idx: 0,
+                },
             },
         ))
     }
@@ -170,16 +182,10 @@ impl<'a> ServerSend<'a> {
     async fn send_loop(&mut self) -> Result<(), Error> {
         const INTERVAL: Duration = Duration::from_millis(20);
 
-        let mut buf = Vec::with_capacity(PKT_LEN);
         loop {
             let pkt_send_time = Instant::now();
 
-            if !self.clients.is_empty() {
-                self.gen_next_pkt(&mut buf)?;
-                for addr in self.clients {
-                    self.socket.send_to(&buf, &addr).await?;
-                }
-            }
+            self.send_packet_to_all().await?;
 
             let sleep_dur = INTERVAL
                 .checked_sub(pkt_send_time.elapsed())
@@ -189,29 +195,58 @@ impl<'a> ServerSend<'a> {
         }
     }
 
-    fn gen_next_pkt(&mut self, buf: &mut Vec<u8>) -> Result<(), Error> {
-        buf.clear();
-        buf.reserve(PKT_LEN);
-        buf.push(b'd');
+    async fn send_packet_to_all(&mut self) -> Result<(), Error> {
+        if self.clients.is_empty() {
+            return Ok(());
+        }
+
+        self.pkt.gen_next_pkt()?;
+
+        let mut futs = self.send_futures.borrow()?;
+        futs.reserve(self.clients.len());
+        for addr in self.clients {
+            futs.push(send_to(self.socket, self.pkt.data(), addr));
+        }
+
+        futs.run().await?;
+
+        Ok(())
+    }
+}
+
+async fn send_to<'a>(socket: &'a UdpSocket, pkt: &'a [u8], addr: SocketAddr) -> Result<(), Error> {
+    socket.send_to(pkt, addr).await?;
+    Ok(())
+}
+
+impl<'a> PktToSend<'a> {
+    fn gen_next_pkt(&mut self) -> Result<(), Error> {
+        self.buf.clear();
+        self.buf.reserve(PKT_LEN);
+        self.buf.push(b'd');
 
         self.pkt_cnt += 1;
-        buf.extend_from_slice(&self.pkt_cnt.to_be_bytes());
+        self.buf.extend_from_slice(&self.pkt_cnt.to_be_bytes());
 
         let time_ms = self.start.elapsed().as_millis() as u64;
-        buf.extend_from_slice(&time_ms.to_be_bytes());
+        self.buf.extend_from_slice(&time_ms.to_be_bytes());
 
-        self.fill_with_random(buf);
+        self.fill_with_random();
 
         Ok(())
     }
 
-    fn fill_with_random(&mut self, buf: &mut Vec<u8>) {
-        let mut to_fill = PKT_LEN - buf.len();
+    fn data(&self) -> &[u8] {
+        &self.buf
+    }
+
+    fn fill_with_random(&mut self) {
+        let mut to_fill = PKT_LEN - self.buf.len();
         let mut left_data_size = self.random_data.len() - self.random_data_idx;
 
         while to_fill > 0 {
             let to_copy = cmp::min(to_fill, left_data_size);
-            buf.extend_from_slice(
+            self.buf.extend_from_slice(
                 &self.random_data[self.random_data_idx..self.random_data_idx + to_copy],
             );
 
