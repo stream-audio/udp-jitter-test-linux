@@ -1,4 +1,4 @@
-use crate::merge_future::WrongLayoutError;
+use crate::merge_futures::WrongLayoutError;
 use rand;
 use std::borrow::Cow;
 use std::fmt;

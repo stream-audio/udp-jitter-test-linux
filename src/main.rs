@@ -3,9 +3,10 @@
 #[macro_use]
 mod macros;
 mod error;
-mod merge_future;
+mod merge_futures;
 mod statistic;
 
+use crate::merge_futures::FuturesMergerMemoryOwner;
 use async_std::{
     net::UdpSocket,
     task::{self, sleep},
@@ -14,7 +15,6 @@ use error::Error;
 use futures::try_join;
 use libc;
 use log::{error, info, warn};
-use merge_future::FuturesMergerMemoryOwner;
 use rand::{self, rngs::SmallRng, RngCore, SeedableRng};
 use simple_logger;
 use std::cell::RefCell;
