@@ -5,6 +5,7 @@ use futures::Future;
 use std::alloc::Layout;
 use std::error::Error as StdError;
 use std::fmt;
+use std::iter::Extend;
 use std::mem::{self, ManuallyDrop};
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -81,6 +82,7 @@ impl FuturesMergerMemoryOwner {
             None => Vec::new(),
             Some(ptr) => unsafe { Vec::from_raw_parts(ptr.as_ptr() as *mut _, 0, self.capacity) },
         };
+        self.to_poll.clear();
 
         Ok(FuturesMerger {
             top: self,
@@ -110,6 +112,7 @@ impl Drop for FuturesMergerMemoryOwner {
 }
 
 impl<'a, F: Future<Output = Result<(), E>>, E: StdError> FuturesMerger<'a, F, E> {
+    #[allow(dead_code)]
     pub fn push(&mut self, fut: F) {
         self.futures.push(fut);
         self.top.to_poll.push(self.futures.len() - 1);
@@ -125,6 +128,14 @@ impl<'a, F: Future<Output = Result<(), E>>, E: StdError> FuturesMerger<'a, F, E>
             futures: &mut self.futures,
             to_poll: &mut self.top.to_poll,
         }
+    }
+}
+
+impl<'a, F: Future<Output = Result<(), E>>, E: StdError> Extend<F> for FuturesMerger<'a, F, E> {
+    fn extend<I: IntoIterator<Item = F>>(&mut self, futures: I) {
+        let prev_len = self.futures.len();
+        self.futures.extend(futures);
+        self.top.to_poll.extend(prev_len..self.futures.len());
     }
 }
 

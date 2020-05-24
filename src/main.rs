@@ -203,10 +203,10 @@ impl<'a> ServerSend<'a> {
         self.pkt.gen_next_pkt()?;
 
         let mut futs = self.send_futures.borrow()?;
+
         futs.reserve(self.clients.len());
-        for addr in self.clients {
-            futs.push(send_to(self.socket, self.pkt.data(), addr));
-        }
+        let (clients, socket, pkt) = (self.clients, self.socket, self.pkt.data());
+        futs.extend(clients.iter().map(|addr| send_to(socket, pkt, addr)));
 
         futs.run().await?;
 
@@ -295,6 +295,13 @@ impl Clients {
     fn is_empty(&self) -> bool {
         self.clients.borrow().is_empty()
     }
+
+    fn iter(&self) -> ClientsIterator {
+        ClientsIterator {
+            clients: &self.clients,
+            idx: 0,
+        }
+    }
 }
 
 impl<'a> IntoIterator for &'a Clients {
@@ -302,10 +309,7 @@ impl<'a> IntoIterator for &'a Clients {
     type IntoIter = ClientsIterator<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        ClientsIterator {
-            clients: &self.clients,
-            idx: 0,
-        }
+        self.iter()
     }
 }
 
@@ -317,7 +321,14 @@ impl<'a> Iterator for ClientsIterator<'a> {
         self.idx += 1;
         item
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.clients.borrow().len();
+        (len, Some(len))
+    }
 }
+
+impl<'a> ExactSizeIterator for ClientsIterator<'a> {}
 
 fn set_voice_data_priority(s: &UdpSocket) -> Result<(), Error> {
     const IPTOS_DSCP_EF: libc::c_int = 0x2E << 2;
